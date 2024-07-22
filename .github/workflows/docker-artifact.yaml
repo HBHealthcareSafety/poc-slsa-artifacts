@@ -1,0 +1,58 @@
+name: SLSA for Docker image
+on: [push]
+env:
+  IMAGE_NAME: output_image
+jobs:
+  # This step builds our image, pushes it, and outputs the repo hash digest.
+  build:
+    permissions:
+      contents: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      # digest: ${{ steps.build.outputs.digest }}
+      # placeholder - digest is generated on docker push
+      digest: ${{ steps.image.outputs.digest }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b # v2.3.4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@dc7b9719a96d48369863986a06765841d7ea23f6 # v2.0.0
+      - name: Build Docker image
+        run: docker build . --tag ${{ env.IMAGE_NAME }}:latest
+      - name: Save image file
+        run: |
+          docker save ${{ env.IMAGE_NAME }}:latest > ${{ env.IMAGE_NAME }}.tar
+      - name: Archive Docker image
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.IMAGE_NAME }}
+          path: ${{ env.IMAGE_NAME }}.tar
+      - name: Output image
+        id: image
+        run: |
+          # NOTE: Set the image as an output because the `env` context is not
+          # available to the inputs of a reusable workflow call.
+          image_name="${IMAGE_NAME}"
+          image_file=${{ env.IMAGE_NAME }}.tar
+          echo "image=$image_name" >> "$GITHUB_OUTPUT"
+          # hash workaround
+          echo "digest=$(sha256sum $image_file | base64 -w0)" >> "$GITHUB_OUTPUT"
+  # This step calls the container workflow to generate provenance and push it to
+  # the container registry.
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read # for detecting the Github Actions environment.
+      id-token: write # for creating OIDC tokens for signing.
+      packages: write # for uploading attestations.
+    # if: startsWith(github.ref, 'refs/tags/')
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    with:
+      image: ${{ needs.build.outputs.image }}
+      digest: ${{ needs.build.outputs.digest }}
+      # needs to be removed
+      continue-on-error: true
+    #   registry-username: ${{ github.actor }}
+    # secrets:
+    #   registry-password: ${{ secrets.GITHUB_TOKEN }}
